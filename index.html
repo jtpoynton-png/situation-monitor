@@ -984,6 +984,8 @@
             // Sign up at finnhub.io (free), paste your token below.
             // Crypto and Forex work without a token.
             const FINNHUB_TOKEN = 'd6popd9r01qk0cf1cb1gd6popd9r01qk0cf1cb20';
+            const FRED_TOKEN    = '8bf37d5dabb583328735f4d76b2a3b71';
+            const FRED_SERIES   = { '^TNX': 'DGS10', '^IRX': 'DGS2', '^GE10Y': 'IRLTLT01DEM156N' };
             // ─────────────────────────────────────────────────────────────────────
 
             // Finnhub uses different symbol formats for commodity futures.
@@ -1030,10 +1032,10 @@
                 { label: 'Copper',        symbol: 'HG=F',      type: 'commodity', source: 'finnhub' },
                 { label: 'Wheat',         symbol: 'ZW=F',      type: 'commodity', source: 'finnhub' },
                 { label: 'Corn',          symbol: 'ZC=F',      type: 'commodity', source: 'finnhub' },
-                // Bonds — Stooq (treasury yield series)
-                { label: 'US 10Y',        symbol: '^TNX',      type: 'bond',      source: 'stooq' },
-                { label: 'US 2Y',         symbol: '^IRX',      type: 'bond',      source: 'stooq' },
-                { label: 'Germany 10Y',   symbol: '^GE10Y',    type: 'bond',      source: 'stooq' },
+                // Bonds — FRED (direct fetch works from real HTTP origins, not file://)
+                { label: 'US 10Y',        symbol: '^TNX',      type: 'bond',      source: 'fred' },
+                { label: 'US 2Y',         symbol: '^IRX',      type: 'bond',      source: 'fred' },
+                { label: 'Germany 10Y',   symbol: '^GE10Y',    type: 'bond',      source: 'fred' },
                 // Forex — open.er-api.com (free, no key, native CORS)
                 { label: 'EUR/USD', symbol: 'EUR', type: 'forex', source: 'forex', invert: true  },
                 { label: 'GBP/USD', symbol: 'GBP', type: 'forex', source: 'forex', invert: true  },
@@ -1180,8 +1182,8 @@
                         try {
                             const stooqUrl = `https://stooq.com/q/l/?s=${encodeURIComponent(ssym)}&f=sd2t2ohlcvr1&h&e=csv`;
                             const resp = await fetch(
-                                `https://corsproxy.io/?url=${encodeURIComponent(stooqUrl)}`,
-                                { signal: AbortSignal.timeout(8000) }
+                                `https://api.allorigins.win/raw?url=${encodeURIComponent(stooqUrl)}`,
+                                { signal: AbortSignal.timeout(10000) }
                             );
                             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                             const text = await resp.text();
@@ -1203,6 +1205,33 @@
                 );
             }
 
+            async function fetchFred() {
+                const fredTickers = TICKERS.filter(t => t.source === 'fred');
+                if (!FRED_TOKEN) { fredTickers.forEach(t => applyQuote(t.symbol, null, null)); return; }
+                await Promise.allSettled(
+                    fredTickers.map(async t => {
+                        const series = FRED_SERIES[t.symbol];
+                        if (!series) { applyQuote(t.symbol, null, null); return; }
+                        try {
+                            const resp = await fetch(
+                                `https://api.stlouisfed.org/fred/series/observations?series_id=${series}&api_key=${FRED_TOKEN}&sort_order=desc&limit=5&file_type=json`,
+                                { signal: AbortSignal.timeout(8000) }
+                            );
+                            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                            const data = await resp.json();
+                            const obs = (data.observations || []).filter(o => o.value !== '.');
+                            if (!obs.length) { applyQuote(t.symbol, null, null); return; }
+                            const current = parseFloat(obs[0].value);
+                            const prev    = obs.length >= 2 ? parseFloat(obs[1].value) : null;
+                            applyQuote(t.symbol, current, prev != null ? (current - prev) * 100 : null);
+                        } catch (e) {
+                            console.warn(`FRED ${t.label}:`, e.message);
+                            applyQuote(t.symbol, null, null);
+                        }
+                    })
+                );
+            }
+
             async function fetchAll() {
                 await Promise.allSettled([
                     fetchFinnhub().catch(e => {
@@ -1212,6 +1241,10 @@
                     fetchStooq().catch(e => {
                         console.error('Stooq fetch failed:', e.message);
                         TICKERS.filter(t => t.source === 'stooq').forEach(t => applyQuote(t.symbol, null, null));
+                    }),
+                    fetchFred().catch(e => {
+                        console.error('FRED fetch failed:', e.message);
+                        TICKERS.filter(t => t.source === 'fred').forEach(t => applyQuote(t.symbol, null, null));
                     }),
                     fetchForex().catch(e => {
                         console.error('Forex fetch failed:', e.message);
