@@ -1001,28 +1001,18 @@
                 'ZC=F': 'ZC1!',  // Corn
             };
 
-            // Stooq symbol mapping for indices and bonds.
-            // Stooq is a free public data service (no key, no CORS restriction).
-            const TO_STOOQ = {
-                '^GSPC':    '^spx',    '^DJI':     '^dji',    '^IXIC':    '^ndq',
-                '^FTSE':    '^ukx',    '^N225':    '^nk225',  '^GDAXI':   '^dax',
-                '^FCHI':    '^cac',    '^HSI':     '^hsi',    '^AXJO':    '^axjo',
-                'DX-Y.NYB': '^dx',
-                '^TNX':     '10yt.b',  '^IRX':     '2yt.b',   '^GE10Y':   'bund.b',
-            };
-
             const TICKERS = [
-                // Indices — Stooq (free, no key, public CSV API)
-                { label: 'S&P 500',       symbol: '^GSPC',     type: 'index',     source: 'stooq' },
-                { label: 'DOW',           symbol: '^DJI',      type: 'index',     source: 'stooq' },
-                { label: 'NASDAQ',        symbol: '^IXIC',     type: 'index',     source: 'stooq' },
-                { label: 'FTSE 100',      symbol: '^FTSE',     type: 'index',     source: 'stooq' },
-                { label: 'Nikkei 225',    symbol: '^N225',     type: 'index',     source: 'stooq' },
-                { label: 'DAX',           symbol: '^GDAXI',    type: 'index',     source: 'stooq' },
-                { label: 'CAC 40',        symbol: '^FCHI',     type: 'index',     source: 'stooq' },
-                { label: 'Hang Seng',     symbol: '^HSI',      type: 'index',     source: 'stooq' },
-                { label: 'ASX 200',       symbol: '^AXJO',     type: 'index',     source: 'stooq' },
-                { label: 'DXY Index',     symbol: 'DX-Y.NYB',  type: 'index',     source: 'stooq' },
+                // Indices — Yahoo Finance via corsproxy.io, Finnhub ETF fallback for US
+                { label: 'S&P 500',       symbol: '^GSPC',     type: 'index',     source: 'indices' },
+                { label: 'DOW',           symbol: '^DJI',      type: 'index',     source: 'indices' },
+                { label: 'NASDAQ',        symbol: '^IXIC',     type: 'index',     source: 'indices' },
+                { label: 'FTSE 100',      symbol: '^FTSE',     type: 'index',     source: 'indices' },
+                { label: 'Nikkei 225',    symbol: '^N225',     type: 'index',     source: 'indices' },
+                { label: 'DAX',           symbol: '^GDAXI',    type: 'index',     source: 'indices' },
+                { label: 'CAC 40',        symbol: '^FCHI',     type: 'index',     source: 'indices' },
+                { label: 'Hang Seng',     symbol: '^HSI',      type: 'index',     source: 'indices' },
+                { label: 'ASX 200',       symbol: '^AXJO',     type: 'index',     source: 'indices' },
+                { label: 'DXY Index',     symbol: 'DX-Y.NYB',  type: 'index',     source: 'indices' },
                 // Commodities — Finnhub (futures symbols, native CORS)
                 { label: 'WTI Crude',     symbol: 'CL=F',      type: 'commodity', source: 'finnhub' },
                 { label: 'Brent Crude',   symbol: 'BZ=F',      type: 'commodity', source: 'finnhub' },
@@ -1098,65 +1088,16 @@
                 });
             }
 
-            // Finnhub: one request per symbol, all run in parallel.
-            // Returns {c, d, dp, h, l, o, pc, t} — c=current, dp=change%.
-            // Returns all zeros for symbols not supported on the free tier.
-            async function fetchFinnhub() {
-                const finnhubTickers = TICKERS.filter(t => t.source === 'finnhub');
+            // ── Data Fetching Pipeline ────────────────────────────────────────────
 
-                if (!FINNHUB_TOKEN) {
-                    finnhubTickers.forEach(t => applyQuote(t.symbol, null, null));
-                    return;
-                }
-
-                await Promise.allSettled(
-                    finnhubTickers.map(async t => {
-                        const fsym = TO_FINNHUB[t.symbol] || t.symbol;
-                        try {
-                            const resp = await fetch(
-                                `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(fsym)}&token=${FINNHUB_TOKEN}`,
-                                { signal: AbortSignal.timeout(8000) }
-                            );
-                            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                            const d = await resp.json();
-                            // Finnhub returns all-zeros for unsupported/unknown symbols
-                            applyQuote(t.symbol, (d.c && d.c !== 0) ? d.c : null, d.dp ?? null);
-                        } catch (e) {
-                            console.warn(`Finnhub ${t.label}:`, e.message);
-                            applyQuote(t.symbol, null, null);
-                        }
-                    })
-                );
-            }
-
-            // Forex via open.er-api.com — free, no key, native CORS, ~hourly updates
-            async function fetchForex() {
-                const resp = await fetch('https://open.er-api.com/v6/latest/USD', {
-                    signal: AbortSignal.timeout(10000)
-                });
-                if (!resp.ok) throw new Error(`Forex HTTP ${resp.status}`);
-                const { rates } = await resp.json();
-                TICKERS.filter(t => t.source === 'forex').forEach(t => {
-                    const rate = rates[t.symbol];
-                    if (rate == null) { applyQuote(t.symbol, null, null); return; }
-                    applyQuote(t.symbol, t.invert ? 1 / rate : rate, null);
-                });
-            }
-
-            // Crypto via CoinGecko — free, no key, native CORS, real-time
-            async function fetchCrypto() {
-                const ids = TICKERS.filter(t => t.source === 'coingecko').map(t => t.symbol).join(',');
-                const resp = await fetch(
-                    `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`,
-                    { signal: AbortSignal.timeout(10000) }
-                );
-                if (!resp.ok) throw new Error(`CoinGecko HTTP ${resp.status}`);
-                const data = await resp.json();
-                TICKERS.filter(t => t.source === 'coingecko').forEach(t => {
-                    const q = data[t.symbol];
-                    applyQuote(t.symbol, q?.usd ?? null, q?.usd_24h_change ?? null);
-                });
-            }
+            // ETF proxies for US indices: used as Finnhub fallback when Yahoo fails.
+            // Note: ETF prices differ from index point values but % change is comparable.
+            const ETF_PROXY = {
+                '^GSPC':    'SPY',   // S&P 500
+                '^DJI':     'DIA',   // Dow Jones
+                '^IXIC':    'QQQ',   // NASDAQ 100
+                'DX-Y.NYB': 'UUP',   // US Dollar Index
+            };
 
             function updateTimestamp() {
                 const ts = new Date().toLocaleTimeString('en-US', {
@@ -1172,44 +1113,111 @@
                 el.textContent = `Updated: ${ts} UTC`;
             }
 
-            // Stooq: free public CSV API, no key, no rate limit.
-            // f=sd2t2ohlcvr1 → Symbol,Date,Time,Open,High,Low,Close,Volume,%Change
-            async function fetchStooq() {
-                const stooqTickers = TICKERS.filter(t => t.source === 'stooq');
+            // Finnhub: commodities — one request per symbol, native CORS, no proxy needed.
+            // Symbols returning c=0 are unsupported on the free tier; logged and skipped.
+            async function fetchFinnhub() {
+                const tickers = TICKERS.filter(t => t.source === 'finnhub');
+                let ok = 0;
                 await Promise.allSettled(
-                    stooqTickers.map(async t => {
-                        const ssym = TO_STOOQ[t.symbol] || t.symbol;
+                    tickers.map(async t => {
+                        const fsym = TO_FINNHUB[t.symbol] || t.symbol;
                         try {
-                            const stooqUrl = `https://stooq.com/q/l/?s=${encodeURIComponent(ssym)}&f=sd2t2ohlcvr1&h&e=csv`;
                             const resp = await fetch(
-                                `https://api.allorigins.win/raw?url=${encodeURIComponent(stooqUrl)}`,
-                                { signal: AbortSignal.timeout(10000) }
+                                `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(fsym)}&token=${FINNHUB_TOKEN}`,
+                                { signal: AbortSignal.timeout(8000) }
                             );
                             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                            const text = await resp.text();
-                            const lines = text.trim().split('\n');
-                            if (lines.length < 2) throw new Error('no data rows');
-                            const cols  = lines[1].split(',');
-                            const close = parseFloat(cols[6]);
-                            const r1    = parseFloat(cols[8]);
-                            if (!close || close === 0) throw new Error('zero/missing price');
-                            // Bonds: convert % change of yield to approx basis points
-                            const pct = isNaN(r1) ? null
-                                      : (t.type === 'bond' ? close * r1 : r1);
-                            applyQuote(t.symbol, close, pct);
+                            const d = await resp.json();
+                            if (!d.c || d.c === 0) {
+                                console.warn(`[Finnhub] ${t.label} (${fsym}): zero price — unsupported on free tier`);
+                                applyQuote(t.symbol, null, null);
+                                return;
+                            }
+                            applyQuote(t.symbol, d.c, d.dp ?? null);
+                            ok++;
                         } catch (e) {
-                            console.warn(`Stooq ${t.label}:`, e.message);
+                            console.warn(`[Finnhub] ${t.label}:`, e.message);
                             applyQuote(t.symbol, null, null);
                         }
                     })
                 );
+                return { ok, total: tickers.length };
             }
 
-            async function fetchFred() {
-                const fredTickers = TICKERS.filter(t => t.source === 'fred');
-                if (!FRED_TOKEN) { fredTickers.forEach(t => applyQuote(t.symbol, null, null)); return; }
+            // Indices: primary = Yahoo Finance via corsproxy.io (CORS proxy required — Yahoo
+            // blocks direct browser requests). Fallback = Finnhub ETF proxy for US indices.
+            // corsproxy.io is more reliable than allorigins.win for Yahoo's chart API.
+            async function fetchIndices() {
+                const tickers = TICKERS.filter(t => t.source === 'indices');
+                let ok = 0;
                 await Promise.allSettled(
-                    fredTickers.map(async t => {
+                    tickers.map(async t => {
+                        let success = false;
+
+                        // Attempt 1: Yahoo Finance via corsproxy.io
+                        try {
+                            const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(t.symbol)}?interval=1d&range=1d`;
+                            const resp = await fetch(
+                                `https://corsproxy.io/?url=${encodeURIComponent(yahooUrl)}`,
+                                { signal: AbortSignal.timeout(10000) }
+                            );
+                            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                            const data = await resp.json();
+                            const meta = data?.chart?.result?.[0]?.meta;
+                            if (!meta) throw new Error('no chart result');
+                            const price = meta.regularMarketPrice;
+                            const prev  = meta.previousClose ?? meta.chartPreviousClose;
+                            if (!price || price === 0) throw new Error('zero price');
+                            const pct = prev ? ((price - prev) / prev) * 100 : null;
+                            applyQuote(t.symbol, price, pct);
+                            ok++;
+                            success = true;
+                        } catch (e) {
+                            console.warn(`[Indices/Yahoo] ${t.label}:`, e.message);
+                        }
+
+                        // Attempt 2: Finnhub with ETF proxy (US indices only)
+                        if (!success && ETF_PROXY[t.symbol]) {
+                            const fsym = ETF_PROXY[t.symbol];
+                            try {
+                                const resp = await fetch(
+                                    `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(fsym)}&token=${FINNHUB_TOKEN}`,
+                                    { signal: AbortSignal.timeout(8000) }
+                                );
+                                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                                const d = await resp.json();
+                                if (!d.c || d.c === 0) throw new Error('zero — ETF not supported');
+                                applyQuote(t.symbol, d.c, d.dp ?? null);
+                                ok++;
+                                success = true;
+                                console.info(`[Indices] ${t.label}: using ETF proxy ${fsym} via Finnhub`);
+                            } catch (e) {
+                                console.warn(`[Indices/Finnhub-ETF] ${t.label} (${fsym}):`, e.message);
+                            }
+                        }
+
+                        if (!success) {
+                            applyQuote(t.symbol, null, null);
+                            console.warn(`[Indices] ${t.label}: all sources failed — showing N/A`);
+                        }
+                    })
+                );
+                return { ok, total: tickers.length };
+            }
+
+            // FRED: US Treasury and German bond yields — daily data, poll max every 30 min.
+            // Internal guard prevents hammering FRED on every 60-second master cycle.
+            let lastFredFetch = 0;
+            async function fetchFred(force = false) {
+                const now = Date.now();
+                if (!force && now - lastFredFetch < 30 * 60 * 1000) {
+                    return { ok: 0, total: 0, skipped: true };
+                }
+                lastFredFetch = now;
+                const tickers = TICKERS.filter(t => t.source === 'fred');
+                let ok = 0;
+                await Promise.allSettled(
+                    tickers.map(async t => {
                         const series = FRED_SERIES[t.symbol];
                         if (!series) { applyQuote(t.symbol, null, null); return; }
                         try {
@@ -1220,46 +1228,108 @@
                             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                             const data = await resp.json();
                             const obs = (data.observations || []).filter(o => o.value !== '.');
-                            if (!obs.length) { applyQuote(t.symbol, null, null); return; }
+                            if (!obs.length) throw new Error('no observations');
                             const current = parseFloat(obs[0].value);
                             const prev    = obs.length >= 2 ? parseFloat(obs[1].value) : null;
+                            // Yield change in basis points (1% = 100bps)
                             applyQuote(t.symbol, current, prev != null ? (current - prev) * 100 : null);
+                            ok++;
                         } catch (e) {
-                            console.warn(`FRED ${t.label}:`, e.message);
+                            console.warn(`[FRED] ${t.label}:`, e.message);
                             applyQuote(t.symbol, null, null);
                         }
                     })
                 );
+                return { ok, total: tickers.length };
             }
 
+            // Forex: open.er-api.com — free, no key, native CORS, ~hourly updates.
+            async function fetchForex() {
+                const tickers = TICKERS.filter(t => t.source === 'forex');
+                let ok = 0;
+                try {
+                    const resp = await fetch('https://open.er-api.com/v6/latest/USD', {
+                        signal: AbortSignal.timeout(10000)
+                    });
+                    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                    const { rates } = await resp.json();
+                    tickers.forEach(t => {
+                        const rate = rates[t.symbol];
+                        if (rate == null) { applyQuote(t.symbol, null, null); return; }
+                        applyQuote(t.symbol, t.invert ? 1 / rate : rate, null);
+                        ok++;
+                    });
+                } catch (e) {
+                    console.warn('[Forex]:', e.message);
+                    tickers.forEach(t => applyQuote(t.symbol, null, null));
+                }
+                return { ok, total: tickers.length };
+            }
+
+            // CoinGecko: BTC and ETH — free, no key, native CORS, real-time prices.
+            async function fetchCrypto() {
+                const tickers = TICKERS.filter(t => t.source === 'coingecko');
+                const ids = tickers.map(t => t.symbol).join(',');
+                let ok = 0;
+                try {
+                    const resp = await fetch(
+                        `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`,
+                        { signal: AbortSignal.timeout(10000) }
+                    );
+                    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                    const data = await resp.json();
+                    tickers.forEach(t => {
+                        const q = data[t.symbol];
+                        if (q?.usd) ok++;
+                        applyQuote(t.symbol, q?.usd ?? null, q?.usd_24h_change ?? null);
+                    });
+                } catch (e) {
+                    console.warn('[CoinGecko]:', e.message);
+                    tickers.forEach(t => applyQuote(t.symbol, null, null));
+                }
+                return { ok, total: tickers.length };
+            }
+
+            // Master fetch: all sources run in parallel via Promise.allSettled so one
+            // failure never crashes others. Per-source rate limits:
+            //   Crypto & Markets: 60 sec  (CoinGecko min / Finnhub 60 calls/min)
+            //   Indices:          60 sec  (Yahoo proxy)
+            //   Forex:             5 min  (open.er-api updates hourly)
+            //   FRED:             30 min  (daily data — also guarded inside fetchFred)
+            let cycleCount = 0;
             async function fetchAll() {
-                await Promise.allSettled([
-                    fetchFinnhub().catch(e => {
-                        console.error('Finnhub fetch failed:', e.message);
-                        TICKERS.filter(t => t.source === 'finnhub').forEach(t => applyQuote(t.symbol, null, null));
-                    }),
-                    fetchStooq().catch(e => {
-                        console.error('Stooq fetch failed:', e.message);
-                        TICKERS.filter(t => t.source === 'stooq').forEach(t => applyQuote(t.symbol, null, null));
-                    }),
-                    fetchFred().catch(e => {
-                        console.error('FRED fetch failed:', e.message);
-                        TICKERS.filter(t => t.source === 'fred').forEach(t => applyQuote(t.symbol, null, null));
-                    }),
-                    fetchForex().catch(e => {
-                        console.error('Forex fetch failed:', e.message);
-                        TICKERS.filter(t => t.source === 'forex').forEach(t => applyQuote(t.symbol, null, null));
-                    }),
-                    fetchCrypto().catch(e => {
-                        console.error('CoinGecko fetch failed:', e.message);
-                        TICKERS.filter(t => t.source === 'coingecko').forEach(t => applyQuote(t.symbol, null, null));
-                    }),
+                cycleCount++;
+                const runForex = cycleCount % 5 === 1;   // every 5 min
+                const runFred  = cycleCount % 30 === 1;  // every 30 min
+
+                const [crypto, finnhub, indices, forex, fred] = await Promise.allSettled([
+                    fetchCrypto(),
+                    fetchFinnhub(),
+                    fetchIndices(),
+                    runForex ? fetchForex() : Promise.resolve({ ok: 0, total: 0, skipped: true }),
+                    runFred  ? fetchFred(true) : fetchFred(false),
                 ]);
+
                 updateTimestamp();
+
+                const fmt = (r, label) => {
+                    if (r.status !== 'fulfilled' || r.value?.skipped) return null;
+                    const v = r.value;
+                    return `${label}: ${v.ok}/${v.total} OK`;
+                };
+                const parts = [
+                    fmt(crypto,  'CoinGecko'),
+                    fmt(finnhub, 'Finnhub'),
+                    fmt(indices, 'Indices'),
+                    runForex ? fmt(forex, 'Forex') : null,
+                    runFred  ? fmt(fred,  'FRED')  : null,
+                ].filter(Boolean);
+                console.log(`[Ticker] Fetch cycle ${cycleCount} complete — ${parts.join(', ')}`);
             }
 
+            // Initial load, then poll every 60 seconds (each source respects its own rate limit)
             fetchAll();
-            setInterval(fetchAll, 180000);
+            setInterval(fetchAll, 60_000);
         })();
     </script>
 </body>
