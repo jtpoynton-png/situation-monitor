@@ -492,19 +492,19 @@
 
         // RSS News Feed functionality
         const rssFeeds = [
-            { name: 'Reuters World', url: 'https://feeds.reuters.com/reuters/worldNews' },
-            { name: 'Reuters Markets', url: 'https://feeds.reuters.com/reuters/businessNews' },
-            { name: 'Reuters Politics', url: 'https://feeds.reuters.com/Reuters/PoliticsNews' },
+            { name: 'Reuters World', url: 'https://news.google.com/rss/search?q=when:24h+allinurl:reuters.com&ceid=US:en&hl=en-US&gl=US' },
+            { name: 'Reuters Markets', url: 'https://news.google.com/rss/search?q=when:24h+allinurl:reuters.com+markets&ceid=US:en&hl=en-US&gl=US' },
+            { name: 'Reuters Politics', url: 'https://news.google.com/rss/search?q=when:24h+allinurl:reuters.com+politics&ceid=US:en&hl=en-US&gl=US' },
             { name: 'BBC World', url: 'http://feeds.bbci.co.uk/news/world/rss.xml' },
             { name: 'Al Jazeera', url: 'https://www.aljazeera.com/xml/rss/all.xml' },
             { name: 'Financial Times', url: 'https://www.ft.com/rss/home' },
             { name: 'Bloomberg Markets', url: 'https://feeds.bloomberg.com/markets/news.rss' },
             { name: 'WSJ World', url: 'https://feeds.a.dj.com/rss/RSSWorldNews.xml' },
             { name: 'Defense News', url: 'https://www.defensenews.com/arc/outboundfeeds/rss/' },
-            { name: 'Foreign Policy', url: 'https://foreignpolicy.com/feed/' },
+            { name: 'Foreign Policy', url: 'https://news.google.com/rss/search?q=when:24h+allinurl:foreignpolicy.com&ceid=US:en&hl=en-US&gl=US' },
             { name: 'The Economist', url: 'https://www.economist.com/the-world-this-week/rss.xml' },
             { name: 'Zero Hedge', url: 'https://feeds.feedburner.com/zerohedge/feed' },
-            { name: 'AP News', url: 'https://feeds.apnews.com/apnews/topnews' }
+            { name: 'AP News', url: 'https://news.google.com/rss/search?q=when:24h+allinurl:apnews.com&ceid=US:en&hl=en-US&gl=US' }
         ];
 
         let currentNewsItems = [];
@@ -569,6 +569,30 @@
                     return [];
                 } catch (error) {
                     console.error(`Failed to fetch ${feed.name}:`, error);
+                    
+                    // Log full response details for specific feeds
+                    if (feed.name === 'Reuters World' || feed.name === 'AP News' || feed.name === 'Foreign Policy') {
+                        console.log(`=== RSS2JSON Error Details for ${feed.name} ===`);
+                        console.log('Feed URL:', feed.url);
+                        console.log('API URL:', `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(feed.url)}`);
+                        console.log('Error object:', error);
+                        console.log('Error message:', error.message);
+                        console.log('Error stack:', error.stack);
+                        
+                        // Try to get response details if available
+                        if (error.response) {
+                            console.log('Response status:', error.response.status);
+                            console.log('Response status text:', error.response.statusText);
+                            console.log('Response headers:', error.response.headers);
+                            error.response.text().then(text => {
+                                console.log('Response body:', text);
+                            }).catch(e => {
+                                console.log('Could not read response body:', e);
+                            });
+                        }
+                        console.log(`=== End Error Details for ${feed.name} ===`);
+                    }
+                    
                     return [];
                 }
             });
@@ -1033,7 +1057,7 @@
             'DAX': '%5EGDAXI',
             'CAC 40': '%5EFCHI',
             'Hang Seng': '%5EHSI',
-            'Shanghai Comp': '000001.SS',
+            'Shanghai Comp': '%5ESSEC',
             'ASX 200': '%5EAXJO',
             'EUR/USD': 'EURUSD=X',
             'GBP/USD': 'GBPUSD=X',
@@ -1100,7 +1124,7 @@
                         if (price !== null && price !== undefined) {
                             // Format price based on symbol type
                             let formattedPrice;
-                            if (symbol.includes('%') || symbol.includes('Y')) {
+                            if (symbol.includes('%') || (symbol.includes('Y') && !symbol.includes('/'))) {
                                 formattedPrice = typeof price === 'number' ? price.toFixed(2) + '%' : price;
                             } else if (symbol.includes('/')) {
                                 formattedPrice = typeof price === 'number' ? price.toFixed(4) : price;
