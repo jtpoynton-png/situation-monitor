@@ -353,7 +353,6 @@
             text-align: right;
             font-weight: bold;
         }\n    </style>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/globe.gl"></script>
 </head>
 <body>
@@ -661,15 +660,6 @@
                     }
                 }
                 
-                // Debug logging for timestamp issues
-                console.log('Timestamp Debug:', {
-                    rawPubDate: item.pubDate,
-                    parsedDate: new Date(item.pubDate),
-                    currentTime: new Date(),
-                    diffMs: timeDiff,
-                    timeString: timeString
-                });
-
                 return `
                     <div class="news-story" onclick="window.open('${item.link}', '_blank')">
                         <div class="news-headline">
@@ -1136,7 +1126,7 @@
                         if (price !== null && price !== undefined) {
                             // Format price based on symbol type
                             let formattedPrice;
-                            if (symbol.includes('%') || (symbol.includes('Y') && !symbol.includes('/'))) {
+                            if (symbol.includes('%') || (symbol.includes('Y') && symbol !== 'DXY Index')) {
                                 formattedPrice = typeof price === 'number' ? price.toFixed(2) + '%' : price;
                             } else if (symbol.includes('/')) {
                                 formattedPrice = typeof price === 'number' ? price.toFixed(4) : price;
